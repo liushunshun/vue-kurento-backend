@@ -11,6 +11,7 @@ import org.kurento.client.IceCandidate;
 import org.kurento.client.IceCandidateFoundEvent;
 import org.kurento.client.KurentoClient;
 import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
@@ -37,10 +38,14 @@ public class VideoEventHandler extends TextWebSocketHandler {
 
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
-        log.info("server websocket receive : {}", message.getPayload());
         try {
             JSONObject data = JSON.parseObject(message.getPayload());
             UserSession user = userRegistry.getBySession(session);
+            if (user != null) {
+                log.debug("server websocket receive from user '{}' : {}", user.getName(), message.getPayload());
+            } else {
+                log.debug("server websocket receive new user : {}", message.getPayload());
+            }
             switch (data.getString("id")) {
                 case "register":
                     register(session, data);
@@ -65,12 +70,41 @@ public class VideoEventHandler extends TextWebSocketHandler {
                         handleErrorResponse(t, session, "callResponse");
                     }
                     break;
+                case "stop":
+                    stop(session);
+                    break;
                 default:
                     break;
             }
-            // sendMessage(session, "hello client");
         } catch (Exception e) {
             log.error("websocket event process exception data={}", message.getPayload(), e);
+        }
+    }
+
+    public void stop(WebSocketSession session) throws Exception {
+        String sessionId = session.getId();
+        if (pipelines.containsKey(sessionId)) {
+            pipelines.get(sessionId).release();
+            CallMediaPipeline pipeline = pipelines.remove(sessionId);
+            pipeline.release();
+
+            UserSession stopperUser = userRegistry.getBySession(session);
+            if (stopperUser != null) {
+                UserSession stoppedUser = null;
+                if (stopperUser.getCallingFrom() != null) {
+                    stoppedUser = userRegistry.getByName(stopperUser.getCallingFrom());
+                }
+                if (stopperUser.getCallingTo() != null) {
+                    stoppedUser = userRegistry.getByName(stopperUser.getCallingTo());
+                }
+                if (stoppedUser != null) {
+                    JSONObject message = new JSONObject();
+                    message.put("id", "stopCommunication");
+                    stoppedUser.sendMessage(message);
+                    stoppedUser.clear();
+                }
+                stopperUser.clear();
+            }
         }
     }
 
@@ -225,5 +259,11 @@ public class VideoEventHandler extends TextWebSocketHandler {
 
     public void sendMessage(WebSocketSession session, String message) throws Exception {
         session.sendMessage(new TextMessage(message));
+    }
+
+    @Override
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        stop(session);
+        userRegistry.removeBySession(session);
     }
 }

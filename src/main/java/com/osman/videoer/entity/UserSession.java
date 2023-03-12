@@ -45,4 +45,9 @@ public class UserSession {
     public String getSessionId() {
         return session.getId();
     }
+
+    public void clear() {
+        this.webRtcEndpoint = null;
+        this.candidateList.clear();
+    }
 }
